@@ -15,7 +15,11 @@ def main() -> None:
 
     ascend_version = _installed_vllm_ascend_version()
     plugin = next(
-        (ep for ep in entry_points(group="vllm.general_plugins") if ep.name == "vllm_ascend_des"),
+        (
+            ep
+            for ep in entry_points(group="vllm.general_plugins")
+            if ep.name == "vllm_ascend_des"
+        ),
         None,
     )
 
@@ -30,4 +34,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

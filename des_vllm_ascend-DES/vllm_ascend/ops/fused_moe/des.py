@@ -48,7 +48,7 @@ BACKEND SEAM (for a future fused kernel)
 The cutoff is expressed as ONE function behind a registry so a fused NPU kernel
 can replace it without touching any call site. To add one:
 
-    from vllm_ascend.ops.fused_moe.des import register_des_backend
+    from vllm_ascend_des.des import register_des_backend
 
     def my_fused_cutoff(topk_weights, topk_ids, threshold, min_k, fake_id):
         ...

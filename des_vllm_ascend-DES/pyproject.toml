@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vllm-ascend-des-patch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Out-of-tree Dynamic Expert Selection patch for vLLM Ascend"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,4 +26,3 @@ packages = [
   "vllm_ascend_des.tik",
 ]
 package-dir = { vllm_ascend_des = "vllm_ascend/ops/fused_moe", "vllm_ascend_des._310p" = "vllm_ascend/_310p/fused_moe", "vllm_ascend_des.tik" = "tik" }
-

@@ -6,6 +6,12 @@ bin-release/
 
 # Other files and folders
 .settings/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
 
 # Executables
 *.swf

@@ -1,10 +1,11 @@
 # Installing DES into a fresh vllm-ascend container
 
-Dynamic Expert Selection (DES) on Ascend 310P3, vllm-ascend 0.23.0rc1.
+Dynamic Expert Selection (DES) on Ascend 310P3, vllm-ascend 0.23.0.
 
-Every command below was executed end to end in a container created from the
-stock image; see "Verification" for what was checked and "Known pitfalls" for
-the three things that actually go wrong.
+The DES algorithm and 310P kernel were validated on the 0.23 release line. The
+plugin integration in this repository targets the 0.23.0 final package and
+delegates to its installed methods. Run the checks in "Verification" on the
+actual target container before production use.
 
 ## What DES is, in one paragraph
 
@@ -18,46 +19,20 @@ weight is merely zeroed (same numerics, no compute saving).
 
 ## What gets installed
 
-Six files, all inside `vllm_ascend`. The Ascend path is self-contained -- it does
-NOT import the GPU-side `vllm/model_executor/layers/fused_moe/des.py`, so a pure
-Ascend install does not need the vLLM-side patch at all. All the files are in `vllm_ascend` directory in this repository.
+`pip install -e .` installs one small distribution named
+`vllm-ascend-des-patch`. It registers the `vllm_ascend_des` entry point in
+vLLM's `vllm.general_plugins` group. vLLM loads that entry point in every
+process, and the plugin wraps the four DES call sites in memory. The wrappers
+delegate to the installed 0.23.0 implementation and only inject DES behavior.
 
-| file | kind |
-|---|---|
-| `vllm_ascend/ops/fused_moe/des.py` | new -- config, backends, cutoff |
-| `vllm_ascend/ops/fused_moe/des_tik.py` | new -- TIK kernel backend |
-| `vllm_ascend/ops/fused_moe/experts_selector.py` | hook (additive) |
-| `vllm_ascend/ops/fused_moe/token_dispatcher.py` | hook |
-| `vllm_ascend/_310p/fused_moe/experts_selector.py` | hook (additive) |
-| `vllm_ascend/_310p/fused_moe/token_dispatcher.py` | hook |
+The installed `vllm_ascend` checkout is not modified. The TIK compiler and
+launcher modules are bundled inside the plugin, so there is no separate copy to
+`/root` and no `VLLM_DES_TIK_DIR` setup.
 
-Plus two helper modules for the `tik` backend, which live OUTSIDE the package
-(default `/root`, override with `VLLM_DES_TIK_DIR`). All the files can be found in `tik` directory in the repository:
-
-| file | purpose |
-|---|---|
-| `des_cutoff_tik.py` | builds the TIK kernel via BuildCCE |
-| `tik_torch_wrapper.py` | ctypes launcher (rtDevBinaryRegister/rtKernelLaunch) |
-
-### Why copying whole files is safe here
-
-The DES delta against the image's upstream is purely additive except for two
-lines in each `token_dispatcher.py` (`expert_num` and `active_expert_range`,
-which DES has to widen by one for the fake expert). Verified by diffing every
-hook file against the stock image and listing every removed line:
-
-```
-vllm_ascend/ops/fused_moe/experts_selector.py    (no lines removed)
-vllm_ascend/ops/fused_moe/token_dispatcher.py    -expert_num=global_num_experts
-                                                 -active_expert_range=[first, last]
-vllm_ascend/_310p/fused_moe/experts_selector.py  (no lines removed)
-vllm_ascend/_310p/fused_moe/token_dispatcher.py  -expert_num=self.num_experts_local
-                                                 -active_expert_range=[first, last]
-```
-
-If you are installing onto a DIFFERENT vllm-ascend build than
-`v0.23.0rc1-310p`, re-run that diff before copying -- wholesale copy would
-silently revert any upstream change in those four files.
+The plugin refuses to load on any version other than vLLM Ascend 0.23.0. This
+prevents an editable plugin from injecting into incompatible upstream APIs. For
+development only, `VLLM_DES_ALLOW_UNSUPPORTED=1` changes the version error into
+a warning.
 
 ## 1. Create the container
 
@@ -75,7 +50,7 @@ docker run -itd --name des --network host --privileged --shm-size=32g \
   -v /etc/ascend_install.info:/etc/ascend_install.info \
   -v /etc/vnpu.cfg:/etc/vnpu.cfg \
   -v /home:/home-host -v /root:/root-host \
-  quay.io/ascend/vllm-ascend:v0.23.0rc1-310p bash
+  quay.io/ascend/vllm-ascend:v0.23.0.post1-310p bash
 ```
 
 `--privileged` is REQUIRED. Passing only the two `/dev/davinci*` devices you
@@ -89,56 +64,46 @@ docker exec des python3 -c "import torch, torch_npu; print(torch.npu.device_coun
 # expect: 8
 ```
 
-The stock image already contains vLLM 0.23.0 and vllm-ascend 0.23.0rc1 as
-editable source checkouts under `/vllm-workspace`, so editing files there takes
-effect with no reinstall:
+The stock image already contains vLLM 0.23.0 and vllm-ascend 0.23.0. Confirm
+that the plugin will patch the expected installation:
 
 ```bash
 docker exec des python3 -c "import vllm_ascend, os; print(os.path.dirname(vllm_ascend.__file__))"
 # expect: /vllm-workspace/vllm-ascend/vllm_ascend
 ```
 
-## 2. Copy the DES files in
+## 2. Install the patch package
 
-From the repo root on your workstation:
-
-```bash
-tar czf des_src.tgz -C vllm-ascend \
-  vllm_ascend/ops/fused_moe/des.py \
-  vllm_ascend/ops/fused_moe/des_tik.py \
-  vllm_ascend/ops/fused_moe/experts_selector.py \
-  vllm_ascend/ops/fused_moe/token_dispatcher.py \
-  vllm_ascend/_310p/fused_moe/experts_selector.py \
-  vllm_ascend/_310p/fused_moe/token_dispatcher.py
-tar czf des_kernels.tgz -C DES/kernels des_cutoff_tik.py tik_torch_wrapper.py
-
-scp -P <port> des_src.tgz des_kernels.tgz root@<server>:/tmp/
-```
-
-On the server:
+Copy or mount this repository into the container, then install it from the
+directory containing `pyproject.toml`:
 
 ```bash
-docker cp /tmp/des_src.tgz des:/tmp/
-docker cp /tmp/des_kernels.tgz des:/tmp/
-docker exec des bash -c '
-  mkdir -p /tmp/des_src && tar xzf /tmp/des_src.tgz -C /tmp/des_src
-  A=/vllm-workspace/vllm-ascend
-  cp /tmp/des_src/vllm_ascend/ops/fused_moe/des.py               $A/vllm_ascend/ops/fused_moe/
-  cp /tmp/des_src/vllm_ascend/ops/fused_moe/des_tik.py           $A/vllm_ascend/ops/fused_moe/
-  cp /tmp/des_src/vllm_ascend/ops/fused_moe/experts_selector.py  $A/vllm_ascend/ops/fused_moe/
-  cp /tmp/des_src/vllm_ascend/ops/fused_moe/token_dispatcher.py  $A/vllm_ascend/ops/fused_moe/
-  cp /tmp/des_src/vllm_ascend/_310p/fused_moe/experts_selector.py $A/vllm_ascend/_310p/fused_moe/
-  cp /tmp/des_src/vllm_ascend/_310p/fused_moe/token_dispatcher.py $A/vllm_ascend/_310p/fused_moe/
-  tar xzf /tmp/des_kernels.tgz -C /root
+docker cp . des:/opt/vllm-ascend-des-patch
+docker exec des bash -lc '
+  cd /opt/vllm-ascend-des-patch
+  python3 -m pip install -e .
+  python3 -m vllm_ascend_des
 '
 ```
 
-Import check (DES off is the correct default):
+Expected final line:
+
+```text
+Installation check: OK
+```
+
+Restart all vLLM processes after installing or editing the package. If the
+environment already sets `VLLM_PLUGINS`, add this plugin to that allowlist:
 
 ```bash
-docker exec des python3 -c \
-  "import vllm_ascend.ops.fused_moe.des as d; print(d.DES)"
-# expect: DESConfig(enabled=False, threshold=1.0, min_k=1, skip=False, backend='torch')
+export VLLM_PLUGINS=vllm_ascend_des
+```
+
+With DES disabled, startup should still contain the plugin load line but uses
+the original behavior:
+
+```text
+[DES] vLLM Ascend patch plugin loaded (vllm-ascend=0.23.0, target=0.23.0)
 ```
 
 ## 3. Configuration
@@ -152,7 +117,6 @@ All read once at import; restart the server to change any of them.
 | `VLLM_DES_MIN_K` | `1` | always keep at least this many experts |
 | `VLLM_DES_SKIP` | `0` | `1` = skip dropped experts' compute (the speed win) |
 | `VLLM_DES_BACKEND` | `torch` | `torch`, `triu`, `fused`, `fused_sorted`, `tik` |
-| `VLLM_DES_TIK_DIR` | `/root` | where the two TIK helper modules live |
 | `VLLM_DES_TIK_DYNAMIC` | `1` | one kernel binary for all shapes/thresholds |
 | `VLLM_DES_STATS` | `0` | log the measured drop rate (see pitfalls) |
 
@@ -267,15 +231,9 @@ inside the noise by batch 16. DES itself keeps gaining at larger batch.
 ## Uninstall
 
 ```bash
-docker exec des bash -c '
-  cd /vllm-workspace/vllm-ascend
-  rm -f vllm_ascend/ops/fused_moe/des.py vllm_ascend/ops/fused_moe/des_tik.py
-  git checkout -- vllm_ascend/ops/fused_moe/experts_selector.py \
-                  vllm_ascend/ops/fused_moe/token_dispatcher.py \
-                  vllm_ascend/_310p/fused_moe/experts_selector.py \
-                  vllm_ascend/_310p/fused_moe/token_dispatcher.py
-'
+docker exec des python3 -m pip uninstall -y vllm-ascend-des-patch
 ```
 
-Or simply leave the files in place and set `VLLM_DES_ENABLE=0`, which restores
-the upstream code path exactly.
+Restart all vLLM processes afterward. Or leave the plugin installed and set
+`VLLM_DES_ENABLE=0`, which keeps the patched functions on the upstream code
+path without applying DES.

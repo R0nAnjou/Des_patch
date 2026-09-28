@@ -1,12 +1,13 @@
 # vLLM Ascend DES patch
 
 This repository packages Dynamic Expert Selection (DES) as an out-of-tree
-vLLM plugin. It targets **vLLM Ascend 0.23.0rc1 on Ascend 310P3**.
+vLLM plugin. It targets **vLLM Ascend 0.23.0 on Ascend 310P3**.
 
 The plugin uses vLLM's `vllm.general_plugins` entry point. It is loaded in the
-API process and every engine/worker process, then patches the four DES call
-sites in memory. It does not copy files into or modify the installed
-`vllm_ascend` source tree.
+API process and every engine/worker process, then wraps the four DES call sites
+in memory. Each wrapper delegates to the installed 0.23.0 implementation, so
+upstream behavior is retained. It does not copy files into or modify the
+installed `vllm_ascend` source tree.
 
 ## Install
 
@@ -44,14 +45,12 @@ hardware notes, and known pitfalls.
 
 ## Compatibility policy
 
-The patched methods are snapshots of vLLM Ascend 0.23.0rc1. The plugin refuses
-to load on another version because silently applying them to different upstream
-code is unsafe. For development only, `VLLM_DES_ALLOW_UNSUPPORTED=1` changes
-that error into a warning.
+The plugin refuses to load on a version other than vLLM Ascend 0.23.0. For
+development only, `VLLM_DES_ALLOW_UNSUPPORTED=1` changes that error into a
+warning.
 
 Uninstall with:
 
 ```bash
 python -m pip uninstall vllm-ascend-des-patch
 ```
-
